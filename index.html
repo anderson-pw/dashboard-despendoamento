@@ -75,7 +75,7 @@
       <div class="consumption-heading"><div class="kpi-icon">L/h</div><p>Consumo</p></div>
       <div class="consumption-groups" aria-live="polite">
         <div><span class="consumption-brand">Hagie</span><strong id="hagieConsumption">—</strong><small id="hagieConsumptionDetail">Meta: 15 L/h</small></div>
-        <div><span class="consumption-brand">Oxbo</span><strong id="oxboConsumption">—</strong><small id="oxboConsumptionDetail">Meta: 33 L/h</small></div>
+        <div><span class="consumption-brand">Oxbo</span><strong id="oxboConsumption">—</strong><small id="oxboConsumptionDetail">Meta: 30 L/h</small></div>
       </div>
     </article>
   </section>
@@ -98,7 +98,7 @@
 <script>
   const SPREADSHEET_ID='1E8HFaOwkrdwJAnYm2aXg5sY0dTqFPnTUILi4eOow8ws';
   const SHEET_URLS={operations:`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Planilha1`,equipment:`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Planilha2`,fuel:`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Planilha3`};
-  const TOTAL_AREA=4932,TARGETS={HAGIE:15,OXBO:33},INVESTIGATION_MARGIN=.10;
+  const TOTAL_AREA=4932,TARGETS={HAGIE:15,OXBO:30},INVESTIGATION_MARGIN=.10;
   const embeddedOperationRows=[
     ['Data Inicial','Data Final','Ativo','Operador','Faca','Pneu','Faca + Pneu','Corte Macho','Área Total (ha)','Pivot','Horímetro Inicial','Horímetro Final','Litros Abastecidos','Placa'],
     ['23/08/2026','24/08/2026','119781','Fábio Alencar','37','','','','105','M2V2702','1333','1340','318,29','BYR1965'],['','','119995','Rafael Lima','37','','','','','','153','163','300','BYR1985'],['','','110379','Carlos Henrique','31','','','','','','3469','3474','85,02','HAG0014'],['24/08/2026','24/08/2026','119782','Cleberson José','37,5','','','','75','M2V2716','1231','1237','175,52','BYR1955'],['','','119613','Joseli Manoel','37,5','','','','','','1954','1960','205','HAG0019'],['24/08/2026','26/08/2026','119781','Fábio Alencar','','60','','','','M2V2702','1340','1351','318,29','BYR1965'],['','','119995','Rafael Lima','','45','','','','','163','171','300','BYR1985'],['25/08/2026','26/08/2026','119782','Cleberson José','102','','','','102','M2V2715','1237','1255','175,52','BYR1955'],['24/08/2026','25/08/2026','119613','Joseli Manoel','','75','','','75','M2V2716','1960','1975','205','HAG0019']
