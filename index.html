@@ -91,7 +91,7 @@
     <div id="exceptionList" class="exception-grid"></div>
   </section>
 
-  <section class="panel table-panel"><div class="panel-title"><div><span>DETALHAMENTO</span><h3>Operação por ativo e dia</h3></div><small id="rowCount">0 linhas</small></div><div class="table-wrap"><table><thead><tr><th>Dia</th><th>Ativo</th><th>Marca</th><th>Tipo de corte</th><th>Área</th><th>Horas</th><th>Litros totais</th><th>Consumo</th></tr></thead><tbody id="detailsBody"></tbody></table><div id="emptyState" class="empty" hidden>Nenhum registro para os filtros selecionados.</div></div></section>
+  <section class="panel table-panel"><div class="panel-title"><div><span>DETALHAMENTO</span><h3>Operação por ativo e dia</h3></div><small id="rowCount">0 linhas</small></div><div class="table-wrap"><table><thead><tr><th>Data Inicial</th><th>Data Final</th><th>Ativo</th><th>Marca</th><th>Tipo de Corte</th><th>Área</th><th>Litros Abastecidos</th><th>Horas Trabalhadas</th><th>Consumo Dia</th></tr></thead><tbody id="detailsBody"></tbody></table><div id="emptyState" class="empty" hidden>Nenhum registro para os filtros selecionados.</div></div></section>
   <footer><span>Dashboard de Despendoamento</span><span>Desenvolvido por Anderson Prado © 2026</span></footer>
 </main>
 
@@ -116,7 +116,63 @@
   function columnResolver(rows){const headers=(rows[0]||[]).map(headerKey);return name=>headers.findIndex(header=>header===headerKey(name))}
   function normalizeOperations(rows){if(rows.length<2)return[];const col=columnResolver(rows);let lastDate='',lastEnd='';return rows.slice(1).flatMap((row,sequence)=>{const date=toIsoDate(row[col('Data Inicial')]),end=toIsoDate(row[col('Data Final')]);if(date)lastDate=date;if(end)lastEnd=end;const asset=String(row[col('Ativo')]??'').trim();if(!asset||!lastDate)return[];const cuts=cutColumns.map(type=>({type,hectares:toNumber(row[col(type)])})).filter(cut=>cut.hectares>0),initial=toNumber(row[col('Horímetro Inicial')]),final=toNumber(row[col('Horímetro Final')]);return[{sequence,date:lastDate,endDate:lastEnd||lastDate,asset,plate:String(row[col('Placa')]??'').trim().toUpperCase(),operator:String(row[col('Operador')]??'Não informado').trim()||'Não informado',cuts:cuts.length?cuts:[{type:'Não informado',hectares:0}],hectares:cuts.reduce((sum,cut)=>sum+cut.hectares,0),pivot:String(row[col('Pivot')]??'').trim()||'—',initial,final,hours:Math.max(0,final-initial),operationLiters:toNumber(row[col('Litros Abastecidos')])}]})}
   function normalizeEquipment(rows){if(rows.length<2)return[];const col=columnResolver(rows);return rows.slice(1).flatMap(row=>{const asset=String(row[col('Ativo')]??'').trim(),plate=String(row[col('Placa')]??'').trim().toUpperCase(),brand=String(row[col('MARCA')]??'').trim().toUpperCase();return asset||plate?[{asset,plate,brand,model:String(row[col('MODELO')]??'').trim()}]:[]})}
-  function normalizeFuel(rows){if(rows.length<2)return[];const col=columnResolver(rows);return rows.slice(1).flatMap((row,sequence)=>{const plate=String(row[col('PLACA')]??'').trim().toUpperCase(),liters=toNumber(row[col('LITROS')]),date=toIsoDate(row[col('DATA')]);return plate&&liters>0?[{sequence,plate,liters,date}]:[]})}
+  function optionalNumber(value){
+    if(value===null||value===undefined||String(value).trim()==='')return null;
+    const parsed=typeof value==='number'?value:Number(String(value).trim().replace(/\s/g,'').replace(/\.(?=\d{3}(?:\D|$))/g,'').replace(',','.'));
+    return Number.isFinite(parsed)?parsed:null;
+  }
+  function normalizeFuel(rows){
+    if(rows.length<2)return[];
+    const col=columnResolver(rows);
+    return rows.slice(1).flatMap((row,sequence)=>{
+      const plate=String(row[col('PLACA')]??'').trim().toUpperCase(),liters=toNumber(row[col('LITROS')]),date=toIsoDate(row[col('DATA')]);
+      const workedHours=optionalNumber(row[col('HORAS TRABALHADAS')]),dailyConsumption=optionalNumber(row[col('CONSUMO DIA')]);
+      return plate&&liters>0?[{sequence,plate,liters,date,workedHours,dailyConsumption}]:[];
+    });
+  }
+  function dailyFuelByPlate(){
+    const groups=new Map,byPlate=new Map;
+    fuelings.forEach(item=>{
+      if(!item.date)return;
+      const key=item.plate+'|'+item.date,group=groups.get(key)||[];
+      group.push(item);groups.set(key,group);
+    });
+    groups.forEach(events=>{
+      const {plate,date}=events[0],liters=events.reduce((sum,item)=>sum+item.liters,0);
+      const hours=events.every(item=>item.workedHours!==null&&item.workedHours>=0)?events.reduce((sum,item)=>sum+item.workedHours,0):null;
+      const lph=events.length===1?events[0].dailyConsumption:hours>0?liters/hours:null;
+      const days=byPlate.get(plate)||[];
+      days.push({date,liters,hours,lph,count:events.length});byPlate.set(plate,days);
+    });
+    return byPlate;
+  }
+  function closestFuelDay(days,endDate){
+    const target=Date.parse(endDate+'T00:00:00Z');
+    if(!Number.isFinite(target))return null;
+    let closest=null,bestDistance=Infinity;
+    for(const day of days||[]){
+      const distance=Math.abs(Date.parse(day.date+'T00:00:00Z')-target);
+      if(distance<bestDistance||(distance===bestDistance&&day.date<closest.date)){
+        closest=day;bestDistance=distance;
+      }
+    }
+    return closest;
+  }
+  function detailDate(iso){return iso?iso.split('-').reverse().join('/'):'—'}
+  function renderDetails(items){
+    const {byPlate,byAsset}=equipmentMaps(),fuelDays=dailyFuelByPlate();
+    const sorted=[...items].sort((a,b)=>a.date.localeCompare(b.date)||a.sequence-b.sequence);
+    $('detailsBody').innerHTML=sorted.map(item=>{
+      const equipmentMatch=byPlate.get(item.plate)||byAsset.get(item.asset)||{},brand=equipmentMatch.brand||'—';
+      const plate=item.plate||equipmentMatch.plate||'',endDate=item.endDate||item.date,daily=closestFuelDay(fuelDays.get(plate),endDate);
+      const threshold=(TARGETS[brand]||0)*(1+INVESTIGATION_MARGIN),isAlert=daily?.lph!==null&&daily?.lph!==undefined&&threshold>0&&daily.lph>=threshold;
+      const matchedNote=daily&&daily.date!==endDate?`<small title="Abastecimento mais próximo da data final">Abast.: ${detailDate(daily.date)}</small>`:'';
+      const consumptionNote=!daily?'Sem abastecimento datado':daily.lph===null?'Sem consumo na Planilha3':daily.count>1?daily.count+' abastecimentos no dia':'';
+      return `<tr><td><strong>${detailDate(item.date)}</strong></td><td><strong>${detailDate(endDate)}</strong></td><td><span class="asset-pill">${escapeHtml(item.asset)}</span></td><td><span class="brand-tag">${escapeHtml(brand)}</span></td><td>${item.cuts.map(cut=>`<span class="cut-tag" style="color:${cutColors[cut.type]||'#64748b'}">${escapeHtml(cut.type)}</span>`).join(' ')}</td><td><strong>${number(item.hectares)} ha</strong></td><td class="consumption-cell"><strong>${daily?number(daily.liters,2)+' L':'—'}</strong>${matchedNote}</td><td><strong>${daily&&daily.hours!==null?number(daily.hours,2)+' h':'—'}</strong></td><td class="consumption-cell"><strong class="${isAlert?'alert':''}">${daily&&daily.lph!==null?number(daily.lph,2)+' L/h':'—'}</strong>${consumptionNote?'<small>'+consumptionNote+'</small>':''}</td></tr>`;
+    }).join('');
+    $('rowCount').textContent=`${sorted.length} ${sorted.length===1?'linha':'linhas'}`;
+    $('emptyState').hidden=sorted.length>0;
+  }
   function fuelRowsFromOperations(rows){const col=columnResolver(rows);return [['PLACA','LITROS','DATA'],...rows.slice(1).flatMap(row=>{const plate=String(row[col('Placa')]??'').trim(),liters=toNumber(row[col('Litros Abastecidos')]);return plate&&liters>0?[[plate,String(row[col('Litros Abastecidos')]),String(row[col('Data Inicial')]??'')]]:[]})]}
   function mapSum(items,keyFn,valueFn){const map=new Map;items.forEach(item=>{const key=keyFn(item);map.set(key,(map.get(key)||0)+valueFn(item))});return [...map].map(([label,value])=>({label,value}))}
   function equipmentMaps(){const byPlate=new Map,byAsset=new Map;equipment.forEach(item=>{if(item.plate)byPlate.set(item.plate,item);if(item.asset&&!byAsset.has(item.asset))byAsset.set(item.asset,item)});return{byPlate,byAsset}}
@@ -133,17 +189,21 @@
   }
   function renderFilters(){const days=[...new Set(operations.map(item=>item.date))].sort(),assets=[...new Set(operations.map(item=>item.asset))].sort();$('dayFilter').innerHTML='<option value="all">Todos os dias</option>'+days.map(day=>`<option value="${day}">${formatDate(day)}</option>`).join('');$('assetFilter').innerHTML='<option value="all">Todos os ativos</option>'+assets.map(asset=>`<option value="${escapeHtml(asset)}">Ativo ${escapeHtml(asset)}</option>`).join('');$('dayFilter').value=days.includes(selectedDay)?selectedDay:'all';$('assetFilter').value=assets.includes(selectedAsset)?selectedAsset:'all';selectedDay=$('dayFilter').value;selectedAsset=$('assetFilter').value}
   function renderTimeline(assetScope){const progressOperations=operations.filter(item=>(assetScope==='all'||item.asset===assetScope)&&(selectedDay==='all'||item.date<=selectedDay)),latestDate=[...new Set(progressOperations.map(item=>item.endDate||item.date))].sort().at(-1),realized=progressOperations.reduce((sum,item)=>sum+item.hectares,0),percentage=Math.min(100,Math.max(0,realized/TOTAL_AREA*100));$('dailyTimeline').innerHTML=latestDate?`<div class="progress-content"><div class="progress-head"><div class="progress-date"><span>Realizado até</span><strong>${formatDate(latestDate)}</strong></div><strong class="progress-value">${number(percentage,2)}%</strong></div><div class="progress-track" role="progressbar" aria-label="Percentual de hectares despendoados" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percentage.toFixed(2)}"><i style="width:${percentage}%"></i></div><div class="progress-caption"><span>${number(realized)} ha realizados</span><span>${number(TOTAL_AREA)} ha previstos</span></div></div>`:'<div class="empty">Nenhuma área disponível para o progresso acumulado.</div>'}
-  function render(){const filtered=operations.filter(item=>(selectedDay==='all'||item.date===selectedDay)&&(selectedAsset==='all'||item.asset===selectedAsset)),hectares=filtered.reduce((sum,item)=>sum+item.hectares,0),hourSummaries=hoursByAsset(filtered),dailyHourMap=new Map(hoursByAssetDay(filtered).map(item=>[item.key,item.hours])),hours=hourSummaries.reduce((sum,item)=>sum+item.hours,0),assets=new Set(filtered.map(item=>item.asset)).size,assetHours=hourSummaries.map(item=>({label:item.asset,value:item.hours})).sort((a,b)=>b.value-a.value),cutMap=new Map;filtered.forEach(item=>item.cuts.forEach(cut=>cutMap.set(cut.type,(cutMap.get(cut.type)||0)+cut.hectares)));const cuts=[...cutMap].map(([label,value])=>({label,value})).sort((a,b)=>b.value-a.value),cutTotal=cuts.reduce((sum,item)=>sum+item.value,0),allDays=[...new Set(filtered.map(item=>item.date))].sort(),allEndDays=[...new Set(filtered.map(item=>item.endDate||item.date))].sort(),summaries=machineSummaries(selectedAsset),summaryMap=new Map(summaries.map(item=>[item.asset,item])),alerts=summaries.filter(item=>item.isAlert);
+  function render(){const filtered=operations.filter(item=>(selectedDay==='all'||item.date===selectedDay)&&(selectedAsset==='all'||item.asset===selectedAsset)),hectares=filtered.reduce((sum,item)=>sum+item.hectares,0),hourSummaries=hoursByAsset(filtered),hours=hourSummaries.reduce((sum,item)=>sum+item.hours,0),assets=new Set(filtered.map(item=>item.asset)).size,assetHours=hourSummaries.map(item=>({label:item.asset,value:item.hours})).sort((a,b)=>b.value-a.value),cutMap=new Map;filtered.forEach(item=>item.cuts.forEach(cut=>cutMap.set(cut.type,(cutMap.get(cut.type)||0)+cut.hectares)));const cuts=[...cutMap].map(([label,value])=>({label,value})).sort((a,b)=>b.value-a.value),cutTotal=cuts.reduce((sum,item)=>sum+item.value,0),allDays=[...new Set(filtered.map(item=>item.date))].sort(),allEndDays=[...new Set(filtered.map(item=>item.endDate||item.date))].sort(),summaries=machineSummaries(selectedAsset),alerts=summaries.filter(item=>item.isAlert);
     const dayCount=new Set(filtered.map(item=>item.date)).size;$('areaKpi').textContent=`${number(hectares)} ha`;$('areaDetail').textContent=`${dayCount} ${dayCount===1?'dia':'dias'} no período`;$('hoursKpi').textContent=`${number(hours)} h`;$('assetsKpi').textContent=assets;$('assetsDetail').textContent=`${filtered.length} ${filtered.length===1?'registro operacional':'registros operacionais'}`;renderConsumption(summaries);$('periodLabel').textContent=allDays.length?`${formatDate(allDays[0],true)} — ${formatDate(allEndDays.at(-1),true)}`:'—';$('timeLabel').textContent=lastUpdated.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
     renderTimeline(selectedAsset);const maxHours=Math.max(1,...assetHours.map(item=>item.value));$('assetHoursChart').innerHTML=assetHours.map(item=>`<div class="bar-row"><span>Ativo ${escapeHtml(item.label)}</span><div class="bar-track"><i style="width:${item.value/maxHours*100}%"></i></div><strong>${number(item.value)} h</strong></div>`).join('')||'<div class="empty">Sem horas para o filtro selecionado.</div>';
     let cursor=0;const gradient=cuts.length?`conic-gradient(${cuts.map(item=>{const start=cursor;cursor+=cutTotal?item.value/cutTotal*100:0;return `${cutColors[item.label]||'#94a3b8'} ${start}% ${cursor}%`}).join(',')})`:'#e2e8f0';$('donut').style.background=gradient;$('donutTotal').textContent=number(cutTotal);$('cutLegend').innerHTML=cuts.map(item=>`<div class="legend-row"><span class="legend-dot" style="background:${cutColors[item.label]||'#94a3b8'}"></span><p><strong>${escapeHtml(item.label)}</strong><small>${number(item.value)} ha</small></p></div>`).join('');
     $('alertCount').textContent=`${alerts.length} ${alerts.length===1?'alerta':'alertas'}`;$('alertCount').classList.toggle('has-alerts',alerts.length>0);$('exceptionList').innerHTML=alerts.length?alerts.map(item=>`<article class="exception-card"><div class="exception-top"><div><h4 class="machine-id">Ativo ${escapeHtml(item.asset)}</h4><span class="machine-meta">${escapeHtml(item.brand)} • ${escapeHtml(item.plate)}</span></div><div class="exception-value">${number(item.lph,2)} L/h</div></div><p class="exception-copy">Consumo acumulado <strong>${number(item.deviation*100,1)}% acima da meta</strong>. Meta: ${number(item.meta,1)} L/h; investigação a partir de ${number(item.threshold,1)} L/h. Base: ${number(item.liters)} L ÷ ${number(item.hours)} h.</p><span class="decision-tag">Passível de investigação</span></article>`).join(''):'<div class="exception-empty"><strong>Nenhuma máquina acima do limite de investigação.</strong><br>Hagie: 16,5 L/h • Oxbo: 33,0 L/h.</div>';
-    const {byPlate,byAsset}=equipmentMaps();$('detailsBody').innerHTML=filtered.map(item=>{const summary=summaryMap.get(item.asset),dailyHours=dailyHourMap.get(`${item.asset}|${item.date}`)||0,match=byPlate.get(item.plate)||byAsset.get(item.asset)||{},brand=match.brand||'—';return`<tr><td><strong>${formatDate(item.date,true)}</strong></td><td><span class="asset-pill">${escapeHtml(item.asset)}</span></td><td><span class="brand-tag">${escapeHtml(brand)}</span></td><td>${item.cuts.map(cut=>`<span class="cut-tag" style="color:${cutColors[cut.type]||'#64748b'}">${escapeHtml(cut.type)}</span>`).join(' ')}</td><td><strong>${number(item.hectares)} ha</strong></td><td><strong>${number(dailyHours)} h</strong></td><td><strong>${summary?number(summary.liters)+' L':'—'}</strong></td><td class="consumption-cell"><strong class="${summary?.isAlert?'alert':''}">${summary&&summary.hours?number(summary.lph,2)+' L/h':'—'}</strong><small>${summary?number(summary.liters)+' L ÷ '+number(summary.hours)+' h':'Sem abastecimento'}</small></td></tr>`}).join('');$('rowCount').textContent=`${filtered.length} ${filtered.length===1?'linha':'linhas'}`;$('emptyState').hidden=filtered.length>0}
+    renderDetails(filtered)}
   function setStatus(live,message=''){$('syncStatus').classList.toggle('live',live);$('syncTitle').textContent=live?'Dados atualizados':'Dados de referência';$('syncMessage').textContent=message;$('syncMessage').hidden=!message;$('resolveButton').hidden=live}
   function applyData(operationRows,equipmentRows,fuelRows,origin,persist=false){const parsedOperations=normalizeOperations(operationRows),parsedEquipment=normalizeEquipment(equipmentRows),parsedFuel=normalizeFuel(fuelRows);if(!parsedOperations.length)throw new Error('Nenhum registro operacional válido');operations=parsedOperations;if(parsedEquipment.length)equipment=parsedEquipment;if(parsedFuel.length)fuelings=parsedFuel;selectedDay='all';selectedAsset='all';lastUpdated=new Date();renderFilters();render();setStatus(true);$('connectionPanel').classList.remove('open');if(persist)localStorage.setItem('despendoamento-private-data-v2',JSON.stringify({operationRows,equipmentRows,fuelRows,updatedAt:lastUpdated.toISOString()}))}
   async function fetchSheet(url){const response=await fetch(`${url}&_=${Date.now()}`,{cache:'no-store'});if(!response.ok)throw new Error(`Falha ${response.status}`);return parseDelimited(await response.text())}
   async function refreshData(silent=false){const buttons=[$('refreshButton'),$('retryButton')];buttons.forEach(button=>button.disabled=true);$('refreshButton').textContent='↻ Atualizando…';try{const [operationRows,equipmentRows,fuelRows]=await Promise.all([fetchSheet(SHEET_URLS.operations),fetchSheet(SHEET_URLS.equipment),fetchSheet(SHEET_URLS.fuel)]);if(!operationRows[0]?.some(value=>headerKey(value)==='data inicial')||!equipmentRows[0]?.some(value=>headerKey(value)==='marca')||!fuelRows[0]?.some(value=>headerKey(value)==='litros'))throw new Error('Estrutura inesperada');applyData(operationRows,equipmentRows,fuelRows,'Google Sheets')}catch{setStatus(false,'Não foi possível atualizar as três abas — usando a última base válida');if(!silent)$('connectionPanel').classList.add('open')}finally{buttons.forEach(button=>button.disabled=false);$('refreshButton').textContent='↻ Atualizar dados'}}
-  function applyManualRows(rows,origin){applyData(rows,embeddedEquipmentRows,fuelRowsFromOperations(rows),origin,true)}
+  function applyManualRows(rows,origin){
+    const equipmentRows=[['Ativo','Placa','MARCA','MODELO'],...equipment.map(item=>[item.asset,item.plate,item.brand,item.model])];
+    const fuelRows=[['PLACA','LITROS','DATA','HORAS TRABALHADAS','CONSUMO DIA'],...fuelings.map(item=>[item.plate,item.liters,item.date,item.workedHours??'',item.dailyConsumption??''])];
+    applyData(rows,equipmentRows,fuelRows,origin,true);
+  }
   operations=normalizeOperations(embeddedOperationRows);equipment=normalizeEquipment(embeddedEquipmentRows);fuelings=normalizeFuel(embeddedFuelRows);
   $('dayFilter').addEventListener('change',event=>{selectedDay=event.target.value;render()});$('assetFilter').addEventListener('change',event=>{selectedAsset=event.target.value;render()});$('refreshButton').addEventListener('click',()=>refreshData());$('retryButton').addEventListener('click',()=>refreshData());$('resolveButton').addEventListener('click',()=>$('connectionPanel').classList.toggle('open'));
   $('pasteButton').addEventListener('click',async()=>{try{applyManualRows(parseImported(await navigator.clipboard.readText()),'cópia da Planilha1')}catch{setStatus(false,'Copie o intervalo A1:N1000 da Planilha1 e tente novamente')}});$('fileInput').addEventListener('change',async event=>{const file=event.target.files?.[0];if(!file)return;try{applyManualRows(parseImported(await file.text()),'arquivo da Planilha1')}catch{setStatus(false,'O arquivo não contém as colunas esperadas')}});
